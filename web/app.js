@@ -1,0 +1,150 @@
+import {KEYS,pretty,keyPC,transpose,importIreal} from './music.js';
+import {barsToText,textToBars,replaceRange,setMark,insertBar,deleteBars,blankChart,suggest} from './edit.js';
+import {esc,renderChart} from './chart.js';
+import {request,login,logout,session,remember} from './api.js';
+const $=s=>document.querySelector(s),safeGet=k=>{try{return localStorage.getItem(k)}catch{return null}},safeSet=(k,v)=>{try{localStorage.setItem(k,v);return true}catch{return false}};
+const defaults=await fetch('./sets.json').then(r=>r.json());
+let sets=defaults.map((data,i)=>({id:'public-event-'+i,data,version:0,editable:false}));
+try{const c=JSON.parse(safeGet('jazzbook.sets'));if(Array.isArray(c)&&c.length)sets=c.map(r=>({...r,editable:false}));}catch{}
+let setId=sets[0].id,songId=sets[0].data.songs[0]?.id,drawer=false,stage=false,view=safeGet('jazzbook.layout')||'fit',minor=safeGet('jazzbook.minor')||'m',connected=false,noteTab='common',loadedRemote=false;
+// Retire legacy password storage and capability URLs; private notes stay untouched.
+try{sessionStorage.removeItem('jazzbook.editor')}catch{}
+if(new URLSearchParams(location.hash.slice(1)).has('edit'))history.replaceState(null,'',location.pathname+location.search);
+const transposed={};
+let wake;
+const current=()=>sets.find(s=>s.id===setId)||sets[0];
+const song=()=>current().data.songs.find(s=>s.id===songId)||current().data.songs[0];
+const target=()=>transposed[`${setId}:${song()?.id}`]||song()?.key||editing?.key||mine()?.key||'';
+// The band. No accounts: each person picks their name once per device, which scopes their own notes and chart versions.
+const MEMBERS=[['김종훈','트럼펫'],['윤봉구','색소폰'],['김준수','피아노'],['김원도','베이스'],['고재홍','드럼'],['고종경','기타'],['이혜인','보컬'],['박찬준','피아노']];
+let member=safeGet('jazzbook.member')||'',editing=null,viewCommon=false,afterUnlock='',caret=null;
+const safeDel=k=>{try{localStorage.removeItem(k)}catch{}};
+const noteKey=()=>`jazzbook.note:${member}:${setId}:${song()?.id}`;
+const mineKey=()=>`jazzbook.chart:${member}:${setId}:${song()?.id}`;
+const mine=()=>{try{return JSON.parse(safeGet(mineKey()))}catch{return null}};
+// Tempo: a member's own BPM for a song wins over the shared one.
+const bpmKey=(id=song()?.id)=>`jazzbook.bpm:${member}:${setId}:${id}`;
+const bpmOf=x=>x?safeGet(bpmKey(x.id))||x.bpm||'':'';
+let pendingBpm='',taps=[];
+// The chart on screen: the edit draft, else this member's own version (unless they chose the common one), else common.
+const shown=()=>{const s=song();if(!s)return s;if(editing)return {...s,key:editing.key,bars:editing.bars};const p=!viewCommon&&mine();return p?{...s,key:p.key,bars:p.bars}:s;};
+const sheet=$('#sheet');
+function toast(t){$('#toast').textContent=t;$('#toast').style.display='block';clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('#toast').style.display='none',3500)}
+function modal(title,body){sheet.innerHTML=`<div class="head"><h2>${esc(title)}</h2><button data-act="close" aria-label="닫기">×</button></div>${body}`;if(!sheet.open)sheet.showModal();}
+function render(){document.body.classList.toggle('ed',!!editing);if(!member){picker();return;}const r=current(),s=song(),idx=r.data.songs.indexOf(s),own=s&&!editing&&mine(),me=MEMBERS.find(m=>m[0]===member);document.title=(s?s.title+' · ':'')+'jazzbook';$('#app').innerHTML=`<div class="frame ${stage?'stage':''} ${editing?'editing':''}">${editing?`<header><button data-act="ed-cancel">취소</button><h1 class="title">코드 편집</h1><button class="key" data-act="key" aria-label="전조 키 선택">${esc(pretty(target())||'—')}</button><button class="save" data-act="ed-save">저장</button></header>`:`<header><button data-act="drawer" aria-label="공연 셋리스트 열기">☰</button><h1 class="title">${esc(r.data.title)}</h1>${own?`<button class="ver" data-act="toggle-ver" aria-label="공통 차트와 내 버전 전환">${viewCommon?'공통 차트':'내 버전'}</button>`:''}<button class="key" data-act="key" ${!target()?'disabled':''} aria-label="전조 키 선택">${esc(pretty(target())||'—')}</button>${s?`<button class="key bpm ${safeGet(bpmKey())?'own':''}" data-act="bpm" aria-label="템포 ${esc(bpmOf(s)||'없음')}">${esc(bpmOf(s)||'—')}<small>bpm</small></button>`:''}${s?'<button data-act="edit" aria-label="코드 편집">✎</button>':''}<button data-act="menu" aria-label="보기 설정">···</button></header>`}<div class="workspace">${drawer?`<div class="backdrop" data-act="drawer"></div><aside class="sidebar"><div class="brand">jazzbook <button data-act="drawer" style="float:right;margin-top:-14px" aria-label="셋리스트 닫기">×</button></div><select class="set-select" id="set-select" aria-label="공연 선택">${sets.map(x=>`<option value="${esc(x.id)}" ${x.id===r.id?'selected':''}>${esc(x.data.title)}</option>`).join('')}</select><div>${r.data.songs.map((s,i)=>`<button class="song-row" data-song="${esc(s.id)}" aria-current="${i===idx}"><span class="n">${String(i+1).padStart(2,'0')}</span><span class="name">${esc(s.title)}<small>${esc([pretty(s.key),bpmOf(s)?bpmOf(s)+' bpm':'',s.style].filter(Boolean).join(' · '))}</small>${s.bars.length?'':'<span class="status">차트 대기</span>'}</button>`).join('')||'<p class="hint">아직 등록된 곡이 없습니다.</p>'}</div><div class="sidebar-foot"><button data-act="event">공연 정보 ↗</button><button data-act="share">공연 링크 복사 ↗</button><button data-act="new-song">곡 추가 ＋</button><button data-act="new-event">공연 추가 ＋</button><button data-act="who">${esc(member)} · ${esc(me?.[1]||'')} — 바꾸기</button><p class="status">${connected?'공통 메모 연결됨':'저장된 차트 · 오프라인 사용 가능'}</p></div></aside>`:''}<main class="music"><div class="score ${view==='fit'||editing?'fit':''}">${editing||s?.bars.length?'':`<div class="empty"><strong>${esc(s?.title||'새 공연')}</strong><span>${s?'아직 코드 차트가 없습니다.':'셋리스트에 곡을 추가해주세요.'}</span>${s?'<button data-act="edit" class="key">코드 직접 입력</button><button data-act="import" class="key">iReal Pro 차트 가져오기</button>':''}</div>`}</div></main></div>${editing?panel():`<footer><button data-act="prev" ${idx<=0?'disabled':''} aria-label="이전 곡">←</button><span class="position">${idx+1} / ${r.data.songs.length}</span><button data-act="notes">합주 메모${s?.memo?' ·':''}</button><button data-act="stage">차트만 ⛶</button><button data-act="next" ${idx>=r.data.songs.length-1?'disabled':''} aria-label="다음 곡">→</button></footer>`}${stage?'<button class="stage-exit" data-act="stage">닫기 ⛶</button>':''}</div>`;drawChart();}
+// In fit mode the chart is laid out for the space it has, so a whole song shows without scrolling.
+function drawChart(){const el=$('.score'),s=shown()&&{...shown(),bpm:bpmOf(song())};if(!el||!s?.bars.length)return;const aspect=view==='fit'||editing?Math.max(.2,(el.clientHeight-10)/Math.max(el.clientWidth-4,1)):0;el.innerHTML=renderChart(s,target(),{aspect,minor,head:!editing,edit:!!editing,sel:editing?[editing.i,editing.j]:undefined});}
+let resizeTimer;window.addEventListener('resize',()=>{clearTimeout(resizeTimer);resizeTimer=setTimeout(drawChart,120);});
+function selectSong(id){songId=id;drawer=false;viewCommon=false;render();}
+function picker(){$('#app').innerHTML=`<div class="picker"><h1>당신은 누구인가요?</h1><p>이름을 고르면 내 메모와 내 코드 버전이 보입니다. 이 기기에 기억되고, 메뉴에서 바꿀 수 있어요.</p>${MEMBERS.map(([n,part])=>`<button class="member" data-member="${esc(n)}"><span>${esc(n)}</span><small>${esc(part)}</small></button>`).join('')}</div>`;}
+function choose(name){member=name;safeSet('jazzbook.member',name);
+ // Notes written before names existed belong to whoever picks first on this device.
+ try{for(const k of Object.keys(localStorage)){const m=k.match(/^jazzbook\.note:([^:]+:[^:]+)$/);if(m){const to=`jazzbook.note:${name}:${m[1]}`;if(safeGet(to)===null)safeSet(to,safeGet(k));safeDel(k);}}}catch{}
+ render();toast(`${name}님, 반가워요.`);}
+// Chart editor. Bars are kept in `editing.key`; the text box and keypad work in the key on screen.
+const PAD=[['C','D','E','F','G','A','B','♭','♯','⌫'],['m7','7','Δ7','m','ø7','°7','6','9','13','sus'],['alt','♭9','♯9','♯11','/','%','N.C.','␣','|','↵']];
+const MARKS=[['섹션','section',[['','없음'],['A','A'],['B','B'],['C','C'],['D','D'],['i','Intro']]],['시작선','start',[['','|'],['[','‖'],['{','‖:']]],['끝선','end',[['','|'],[']','‖'],['}',':‖'],['Z','끝']]],['엔딩','ending',[['','없음'],['1.','1.'],['2.','2.'],['3.','3.']]],['박자','time',[['','—'],['4/4','4/4'],['3/4','3/4'],['6/8','6/8']]],['글씨','text',[['','없음'],['Fine','Fine'],['D.C. al Fine','D.C. al Fine'],['D.S. al Fine','D.S. al Fine'],['Solos','Solos']]]];
+const shift=()=>(keyPC(target())??0)-(keyPC(editing.key)??0);
+const inView=bars=>bars.map(b=>({...b,chords:b.chords.map(c=>transpose(c,shift(),target()))}));
+function panel(){const e=editing,sel=e.bars.slice(e.i,e.j+1),text=e.text??barsToText(sel,shift(),target(),minor),ideas=suggest(inView(e.bars),e.i,e.j,target(),minor);e.ideas=ideas;
+ return `<section class="editor" aria-label="코드 편집"><div class="ed-top"><span class="lbl">${e.i===e.j?`${e.i+1}마디`:`${e.i+1}–${e.j+1}마디`} <small>/ ${e.bars.length}</small></span><button data-act="ed-range" class="${e.range?'on':''}" aria-pressed="${e.range}">범위</button><button data-act="ed-struct" class="${e.struct?'on':''}" aria-pressed="${e.struct}">마디 구조</button><button data-act="ed-undo" ${e.hist.length?'':'disabled'} aria-label="되돌리기">↶</button><button data-act="ed-prev" aria-label="이전 마디">‹</button><button data-act="ed-next" aria-label="다음 마디">›</button></div>
+ <div class="ed-line"><input id="ed-text" value="${esc(text)}" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="next" aria-label="선택한 마디의 코드" placeholder="예) Am7 D7 | Gm7 C7"><button class="apply" data-act="ed-apply">적용</button></div>
+ ${ideas.length?`<div class="chips">${ideas.map((x,k)=>`<button data-idea="${k}">${esc(x.label)}<small>${esc(x.text)}</small></button>`).join('')}</div>`:''}
+ ${e.struct?`<div class="struct">${MARKS.map(([name,prop,opts])=>{const b=e.bars[prop==='end'?e.j:e.i];return `<div><span>${name}</span>${opts.map(([v,l])=>`<button data-mark="${prop}" data-val="${esc(v)}" class="${(b[prop]||'')===v?'on':''}">${esc(l)}</button>`).join('')}</div>`;}).join('')}<div><span>마디</span><button data-act="ed-add">뒤에 추가 ＋</button><button data-act="ed-del">선택 삭제 －</button></div></div>`
+ :`<div class="pad">${PAD.flat().map(k=>`<button data-pad="${esc(k)}">${esc(k)}</button>`).join('')}</div><p class="ed-hint">마디는 | 로 구분 · 차트를 끌어서 여러 마디 선택 · 적용하면 다음 마디로</p>`}</section>`;}
+function pad(k){const el=$('#ed-text');if(!el)return;if(k==='↵')return act('ed-apply');let v=el.value,at=caret??v.length,end=at;
+ if(k==='⌫'){if(!at)return;v=v.slice(0,at-1)+v.slice(at);at--;}
+ else{const ins=k==='␣'?' ':k==='|'?' | ':k==='m7'&&minor==='-'?'-7':k==='m'&&minor==='-'?'-':k.replace('♭','b').replace('♯','#');const before=v.slice(0,at),fresh=/^([A-G]|%|N\.C\.)$/.test(k)&&before&&!/[\s|/]$/.test(before);v=before+(fresh?' ':'')+ins+v.slice(end);at=before.length+(fresh?1:0)+ins.length;}
+ el.value=v;caret=at;editing.text=v;}
+function moveSel(i,j=i){editing.i=Math.max(0,Math.min(i,editing.bars.length-1));editing.j=Math.max(editing.i,Math.min(j,editing.bars.length-1));editing.text=null;caret=null;}
+function change(bars){editing.hist.push(editing.bars);if(editing.hist.length>100)editing.hist.shift();editing.bars=bars;editing.dirty=true;}
+function askPassword(next){afterUnlock=next;modal('공통 편집',`<p>공통 메모와 코드는 모든 멤버에게 바로 반영됩니다.</p><label for="pw">비밀번호</label><input id="pw" type="password" autocomplete="current-password" enterkeyhint="done"><button class="primary" data-act="pw-ok">확인</button>`);setTimeout(()=>$('#pw')?.focus(),50);}
+// Shared writes require a revocable server session.
+const SHARED=new Set(['save-bpm','edit-song','save-song','save-key','new-song','add-song','new-event','add-event','edit-event','save-event','move-up','move-down','save-common']);
+let lastSync=0;
+async function refresh(){try{const data=await request();if(!data.sets?.length)throw Error();if(session()&&!data.sets.some(s=>s.editable))remember('');
+ const before=new Map(sets.map(x=>[x.id,x.version])),newer=loadedRemote&&data.sets.some(x=>before.has(x.id)&&x.version>before.get(x.id));
+ sets=data.sets;connected=true;lastSync=Date.now();if(newer)toast('다른 멤버의 공통 변경을 반영했습니다.');if(!loadedRemote){const requested=new URLSearchParams(location.search).get('set');if(requested&&sets.some(s=>s.id===requested)){setId=requested;songId=current().data.songs[0]?.id;}loadedRemote=true;}safeSet('jazzbook.sets',JSON.stringify(sets.map(s=>({...s,editable:false}))));if(!sets.some(s=>s.id===setId))setId=sets[0].id;if(!sheet.open&&!editing)render();}catch{connected=false;}}
+async function save(data){const r=current();const result=await request({id:r.id,version:r.version,data});r.data=data;r.version=result.version;r.updated=result.updated;lastSync=Date.now();safeSet('jazzbook.sets',JSON.stringify(sets.map(s=>({...s,editable:false}))));render();}
+
+function notes(){const s=song();if(!s)return;modal('합주 메모',`<div class="tabs"><button data-act="common" class="${noteTab==='common'?'active':''}">공통</button><button data-act="private" class="${noteTab==='private'?'active':''}">${esc(member)} 메모</button></div>${noteTab==='private'?`<textarea id="private-note" aria-label="${esc(member)} 메모" placeholder="예: A파트 4마디 the lick">${esc(safeGet(noteKey())||'')}</textarea><p class="hint">${esc(member)}님만 봅니다. 이 기기에 자동 저장됩니다.</p>`:`<p>${esc(s.memo||'아직 합주 메모가 없습니다.')}</p>${s.warnings?.length?`<p class="hint">${esc(s.warnings.join(' '))}</p>`:''}<p class="hint">${esc([pretty(s.key),bpmOf(s)?bpmOf(s)+' bpm':'',s.style].filter(Boolean).join(' · '))}</p><button class="primary" data-act="edit-song">공통 메모 편집</button><p class="hint">모든 멤버가 같은 내용을 봅니다. 편집할 때 비밀번호를 묻습니다.</p>`}`);}
+function editSong(){const s=song();if(!s)return;modal('곡 정보 편집',`<label>곡 제목</label><input id="title-input" value="${esc(s.title)}"><div class="inline"><div><label>BPM</label><input id="bpm-input" type="number" min="1" max="400" value="${esc(s.bpm)}"></div><div><label>리듬</label><input id="style-input" value="${esc(s.style)}"></div></div><label>공통 메모</label><textarea id="memo-input">${esc(s.memo)}</textarea><button class="primary" data-act="save-song">전체 멤버에게 저장</button><button class="menu-item" data-act="import">iReal Pro 차트 바꾸기 ↗</button><div class="inline"><button data-act="move-up">순서 ↑</button><button data-act="move-down">순서 ↓</button></div>`);}
+function showImport(){modal('코드 차트 가져오기',`<p>iReal Pro에서 공유한 HTML 파일을 선택하세요. 곡 목록에서 현재 곡의 차트를 고릅니다.</p><input type="file" id="import-file" accept=".html,.htm,.txt" aria-label="iReal Pro HTML 파일"><div id="import-list"></div><p class="hint">${current().editable?'선택한 차트를 공연에 저장합니다.':'지금은 이 기기에서 미리 봅니다. 모두에게 저장하려면 곡 정보의 공통 편집에서 비밀번호를 입력하세요.'}</p>`);}
+let imports=[];
+async function act(a){const s=song(),r=current();try{if(SHARED.has(a)&&!r.editable)return askPassword(a);switch(a){
+case 'close':sheet.close();break;
+case 'drawer':drawer=!drawer;render();break;
+case 'prev':case 'next':{const i=r.data.songs.indexOf(s)+(a==='next'?1:-1);if(r.data.songs[i])selectSong(r.data.songs[i].id);break;}
+case 'key':modal('전조',`<div class="key-grid">${KEYS.map(k=>`<button data-key="${k}" class="${keyPC(target())===keyPC(k)?'chosen':''}">${pretty(k)}${s.key.endsWith('-')?'m':''}</button>`).join('')}</div><p class="hint">원키 ${esc(pretty(s.key))} · 지금 보는 차트에 적용됩니다.</p>${editing||!s.key?'':'<button class="primary" data-act="save-key">현재 키를 공통 키로 저장</button>'}`);break;
+case 'save-key':{const d=structuredClone(r.data),ss=d.songs.find(x=>x.id===s.id),delta=keyPC(target())-keyPC(s.key);ss.bars=ss.bars.map(b=>({...b,chords:b.chords.map(c=>transpose(c,delta,target()))}));ss.key=target();await save(d);sheet.close();toast('공통 키를 저장했습니다.');break;}
+case 'notes':notes();break;
+case 'common':case 'private':noteTab=a;notes();break;
+case 'edit-song':editSong();break;
+case 'save-song':{const d=structuredClone(r.data),ss=d.songs.find(x=>x.id===s.id);ss.title=$('#title-input').value.trim();if(!ss.title)throw Error('곡 제목을 입력해주세요.');ss.bpm=$('#bpm-input').value;ss.style=$('#style-input').value;ss.memo=$('#memo-input').value;await save(d);notes();toast('공통 메모를 저장했습니다.');break;}
+case 'move-up':case 'move-down':{const d=structuredClone(r.data),i=d.songs.findIndex(x=>x.id===s.id),j=i+(a==='move-up'?-1:1);if(j>=0&&j<d.songs.length){[d.songs[i],d.songs[j]]=[d.songs[j],d.songs[i]];await save(d);toast('곡 순서를 저장했습니다.');}break;}
+case 'stage':stage=!stage;sheet.close();drawer=false;render();if(stage&&navigator.wakeLock)try{wake=await navigator.wakeLock.request('screen')}catch{}else if(wake)await wake.release();break;
+case 'menu':{const ago=lastSync?Math.round((Date.now()-lastSync)/1000):0,changed=r.updated?new Date(r.updated).toLocaleString('ko-KR',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}):'';
+ modal('jazzbook',`<div class="sync"><div><b>${connected?'공통 서버 연결됨':'공통 서버에 연결 안 됨'}</b><small>${connected?`${ago<5?'방금':ago+'초 전'} 동기화${changed?` · 마지막 공통 변경 ${esc(changed)}`:''}`:'이 기기에 저장된 사본을 보여주는 중'}</small></div><button data-act="sync">지금 동기화</button></div><button class="menu-item" data-act="${r.editable?'lock':'unlock'}">${r.editable?'공통 편집 열림 · 잠그기':'공통 편집 열기'}<small>${r.editable?'편집 권한 확인됨 · 최대 12시간 유지':'비밀번호는 서버가 확인합니다'}</small></button><button class="menu-item" data-act="admin">관리자 페이지<small>공통 편집 비밀번호 변경</small></button><button class="menu-item" data-act="stage">차트만 보기 ⛶</button><button class="menu-item" data-act="view">차트 크기 · ${view==='fit'?'한 화면에 맞춤':'화면 너비 · 스크롤'}</button><button class="menu-item" data-act="minor">마이너 표기 · ${minor==='m'?'Cm7':'C−7'}</button><button class="menu-item" data-act="theme">${document.body.classList.contains('light')?'검정':'흰색'} 배경으로 전환</button><button class="menu-item" data-act="notes">합주 메모</button>${mine()?'<button class="menu-item" data-act="delete-mine">내 버전 지우기<small>공통 차트로 돌아갑니다</small></button>':''}<button class="menu-item" data-act="who">사용자 바꾸기<small>지금: ${esc(member)}</small></button><button class="menu-item" data-act="import">iReal Pro 차트 가져오기</button><button class="menu-item" data-act="event">공연 정보</button><button class="menu-item" data-act="share">공연 링크 복사</button><p class="hint">iPhone: Safari 공유 → 홈 화면에 추가<br>Android: 브라우저 메뉴 → 앱 설치<br>내 메모와 내 버전은 이 기기에 저장됩니다.</p>`);break;}
+case 'view':view=view==='fit'?'width':'fit';safeSet('jazzbook.layout',view);render();act('menu');break;
+case 'minor':minor=minor==='m'?'-':'m';safeSet('jazzbook.minor',minor);render();act('menu');break;
+case 'theme':document.body.classList.toggle('light');safeSet('jazzbook.theme',document.body.classList.contains('light')?'light':'dark');render();act('menu');break;
+case 'share':{const u=new URL(location.href);u.hash='';u.search='?set='+encodeURIComponent(setId);await navigator.clipboard.writeText(u.href);toast('공연 링크를 복사했습니다.');break;}
+case 'event':modal(r.data.title,`<p>${esc(r.data.date)}<br>${esc(r.data.venue)}</p><p>${esc(r.data.memo)}</p><button class="primary" data-act="edit-event">공연 정보 편집</button>`);break;
+case 'edit-event':modal('공연 정보 편집',`<label>공연 제목</label><input id="event-title" value="${esc(r.data.title)}"><label>일자</label><input id="event-date" type="date" value="${esc(r.data.date)}"><label>장소</label><input id="event-venue" value="${esc(r.data.venue)}"><label>공연 메모</label><textarea id="event-memo">${esc(r.data.memo)}</textarea><button class="primary" data-act="save-event">저장</button>`);break;
+case 'save-event':{const d=structuredClone(r.data);Object.assign(d,{title:$('#event-title').value.trim(),date:$('#event-date').value,venue:$('#event-venue').value,memo:$('#event-memo').value});if(!d.title)throw Error('제목을 입력해주세요.');await save(d);sheet.close();break;}
+case 'new-song':modal('곡 추가','<label>곡 제목</label><input id="new-title"><button class="primary" data-act="add-song">추가</button>');break;
+case 'add-song':{const title=$('#new-title').value.trim();if(!title)throw Error('제목을 입력해주세요.');const d=structuredClone(r.data),id=crypto.randomUUID();d.songs.push({id,title,composer:'',key:'',bpm:'',style:'',memo:'',bars:[]});await save(d);selectSong(id);sheet.close();break;}
+case 'new-event':modal('공연 추가','<label>공연 제목</label><input id="new-title"><button class="primary" data-act="add-event">추가</button>');break;
+case 'add-event':{const title=$('#new-title').value.trim();if(!title)throw Error('제목을 입력해주세요.');const data=await request({action:'create',title});sheet.close();await refresh();setId=data.id;songId='';drawer=true;render();break;}
+case 'import':showImport();break;
+case 'bpm':{if(!s)return;const own=safeGet(bpmKey());taps=[];modal('템포',`<div class="bpm-row"><button data-step="-5">−5</button><button data-step="-1">−1</button><input id="bpm-value" type="number" inputmode="numeric" min="20" max="400" value="${esc(bpmOf(s))}" aria-label="BPM"><button data-step="1">+1</button><button data-step="5">+5</button></div><button class="tap" data-act="tap">탭 템포 · 박자에 맞춰 여러 번 누르세요</button>
+ <p class="hint">공통 ${esc(s.bpm||'—')} bpm${own?` · ${esc(member)}님 템포 ${esc(own)} bpm`:''}</p><button class="menu-item" data-act="bpm-mine">내 템포로 저장<small>${esc(member)}님만 봅니다 · 이 기기에 저장</small></button><button class="menu-item" data-act="bpm-common">공통 템포로 저장<small>모든 멤버에게 반영 · 비밀번호 필요</small></button>${own?'<button class="menu-item" data-act="bpm-clear">내 템포 지우기<small>공통 템포를 씁니다</small></button>':''}`);break;}
+case 'tap':{const now=performance.now();if(taps.length&&now-taps[taps.length-1]>2000)taps=[];taps.push(now);if(taps.length>8)taps.shift();if(taps.length>1){const gaps=taps.slice(1).map((t,k)=>t-taps[k]);$('#bpm-value').value=Math.round(60000/(gaps.reduce((a,b)=>a+b)/gaps.length));}break;}
+case 'bpm-mine':case 'bpm-common':{const v=Math.round(Number($('#bpm-value').value));if(!(v>=20&&v<=400))throw Error('BPM은 20–400 사이로 입력해주세요.');if(a==='bpm-mine'){safeSet(bpmKey(),String(v));sheet.close();render();toast(`내 템포 ${v} bpm으로 저장했습니다.`);break;}pendingBpm=String(v);await act('save-bpm');break;}
+case 'save-bpm':{const d=structuredClone(r.data),ss=d.songs.find(x=>x.id===s.id);ss.bpm=pendingBpm||ss.bpm;await save(d);safeDel(bpmKey());sheet.close();render();toast(`공통 템포를 ${ss.bpm} bpm으로 저장했습니다.`);break;}
+case 'bpm-clear':safeDel(bpmKey());sheet.close();render();toast('공통 템포를 씁니다.');break;
+case 'pw-ok':{const v=$('#pw').value;if(!v)return;await login(v);await refresh();if(!connected)throw Error('로그인 후 데이터를 받지 못했습니다. 다시 동기화해주세요.');const next=afterUnlock;afterUnlock='';sheet.close();if(!editing)render();if(next)await act(next);toast('공통 편집이 열렸습니다.');break;}
+case 'sync':await refresh();if(!editing)render();await act('menu');toast(connected?'최신 공통 데이터를 받았습니다.':'공통 서버에 연결할 수 없습니다.');break;
+case 'unlock':askPassword('menu');break;
+case 'admin':location.href='./admin.html';break;
+case 'lock':await logout();sets.forEach(s=>s.editable=false);await refresh();if(!editing)render();await act('menu');toast('공통 편집을 잠갔습니다.');break;
+case 'who':member='';safeDel('jazzbook.member');editing=null;drawer=false;sheet.close();render();break;
+case 'toggle-ver':viewCommon=!viewCommon;render();break;
+case 'delete-mine':safeDel(mineKey());viewCommon=false;sheet.close();render();toast('내 버전을 지웠습니다. 공통 차트를 봅니다.');break;
+case 'edit':{if(!s)return;const p=!viewCommon&&mine(),src=s.bars.length?(p||s):{key:s.key||'C',bars:blankChart()};editing={key:src.key||'C',bars:structuredClone(src.bars),from:p?'mine':'common',hist:[],i:0,j:0,range:false,struct:false,text:null,dirty:false};stage=false;drawer=false;sheet.close();render();break;}
+case 'ed-cancel':editing=null;render();break;
+case 'ed-range':editing.range=!editing.range;render();break;
+case 'ed-struct':editing.struct=!editing.struct;render();break;
+case 'ed-undo':if(editing.hist.length){editing.bars=editing.hist.pop();moveSel(editing.i,editing.j);render();}break;
+case 'ed-prev':moveSel(editing.i-1);render();break;
+case 'ed-next':moveSel(editing.j+1);render();break;
+case 'ed-apply':{const lists=textToBars($('#ed-text').value,shift(),editing.key);change(replaceRange(editing.bars,editing.i,editing.j,lists));const next=editing.i+lists.length;moveSel(next<editing.bars.length?next:editing.bars.length-1);render();break;}
+case 'ed-add':change(insertBar(editing.bars,editing.j));moveSel(editing.j+1);render();break;
+case 'ed-del':change(deleteBars(editing.bars,editing.i,editing.j));moveSel(editing.i);render();break;
+case 'ed-save':modal('저장',`<button class="menu-item" data-act="save-mine">내 버전으로 저장<small>${esc(member)}님만 봅니다 · 이 기기에 저장</small></button><button class="menu-item" data-act="save-common">공통 차트로 저장<small>모든 멤버에게 반영 · 비밀번호 필요</small></button>`);break;
+case 'save-mine':safeSet(mineKey(),JSON.stringify({key:editing.key,bars:editing.bars,saved:new Date().toISOString()}));editing=null;viewCommon=false;sheet.close();render();toast('내 버전으로 저장했습니다. 다른 멤버에게는 보이지 않아요.');break;
+case 'save-common':{const d=structuredClone(r.data),ss=d.songs.find(x=>x.id===s.id);if(!ss.key)ss.key=editing.key;const delta=keyPC(ss.key)-keyPC(editing.key);ss.bars=editing.bars.map(b=>({...b,chords:b.chords.map(c=>transpose(c,delta,ss.key))}));
+ await save(d);if(editing.from==='mine')safeDel(mineKey());editing=null;sheet.close();render();toast('공통 차트를 저장했습니다. 모든 멤버가 새로고침하면 봅니다.');break;}
+}}catch(e){toast(e.message||'연결을 확인하고 다시 시도해주세요.');}}
+document.addEventListener('click',async e=>{if(stage&&e.target.closest('.score')){const x=$('.stage-exit');if(x){x.style.animation='none';x.offsetWidth;x.style.animation='';}}const b=e.target.closest('button,[data-act]');if(!b)return;if(b.dataset.member)return choose(b.dataset.member);if(b.dataset.pad)return pad(b.dataset.pad);if(b.dataset.step){const el=$('#bpm-value');el.value=Math.min(400,Math.max(20,(Number(el.value)||120)+Number(b.dataset.step)));return;}
+ if(b.dataset.idea&&editing){const x=editing.ideas[+b.dataset.idea];try{const lists=textToBars(x.text,shift(),editing.key);change(replaceRange(editing.bars,editing.i,editing.j,lists));moveSel(editing.i,editing.i+lists.length-1);render();}catch(err){toast(err.message)}return;}
+ if(b.dataset.mark&&editing){const prop=b.dataset.mark;change(setMark(editing.bars,prop==='end'?editing.j:editing.i,prop,b.dataset.val));render();return;}
+ if(b.dataset.act)await act(b.dataset.act);if(b.dataset.song)selectSong(b.dataset.song);if(b.dataset.key){transposed[`${setId}:${song().id}`]=b.dataset.key+((song().key||editing?.key||'').endsWith('-')?'-':'');if(editing){editing.text=null;caret=null;}render();act('key');}if(b.dataset.import){try{const c=imports[Number(b.dataset.import)-1],s=song();if(!s)return;const d=structuredClone(current().data),ss=d.songs.find(x=>x.id===s.id);Object.assign(ss,{bars:c.bars,key:c.key,style:c.style,composer:c.composer,source:c.source,warnings:c.warnings});if(!ss.bpm)ss.bpm=c.bpm;if(current().editable)await save(d);else{current().data=d;toast('미리보기입니다. 공통 저장은 비밀번호로 공통 편집을 연 뒤 가능합니다.');}sheet.close();delete transposed[`${setId}:${s.id}`];render();}catch(e){toast(e.message)}}});
+document.addEventListener('input',e=>{if(e.target.id==='ed-text'&&editing){editing.text=e.target.value;caret=e.target.selectionStart;}if(e.target.id==='private-note'&&!safeSet(noteKey(),e.target.value))toast('기기 저장 공간을 확인해주세요.');});
+document.addEventListener('change',async e=>{if(e.target.id==='set-select'){setId=e.target.value;songId=current().data.songs[0]?.id;render();}if(e.target.id==='import-file'){try{imports=importIreal(await e.target.files[0].text());$('#import-list').innerHTML=imports.map((s,i)=>`<button class="menu-item" data-import="${i+1}">${esc(s.title)} · ${esc(pretty(s.key))}</button>`).join('');}catch(err){toast(err.message)}}});
+document.addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target.id==='ed-text'){e.preventDefault();act('ed-apply');return;}if(e.key==='Enter'&&e.target.id==='bpm-value'){e.preventDefault();act('bpm-mine');return;}if(e.key==='Enter'&&e.target.id==='pw'){e.preventDefault();act('pw-ok');return;}if(sheet.open||editing||/INPUT|TEXTAREA|SELECT/.test(e.target.tagName))return;if(e.key==='ArrowRight')act('next');if(e.key==='ArrowLeft')act('prev');if(e.key==='Escape'&&stage)act('stage');});
+sheet.addEventListener('click',e=>{if(e.target===sheet){const r=sheet.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)sheet.close();}});
+if(safeGet('jazzbook.theme')==='light')document.body.classList.add('light');
+const shared=new URLSearchParams(location.search).get('set');if(shared&&sets.some(s=>s.id===shared)){setId=shared;songId=current().data.songs[0]?.id;}
+// Selecting bars: tap one, drag across several, or turn on 범위 and tap the last bar.
+let drag=null;const barAt=(x,y)=>document.elementFromPoint(x,y)?.closest?.('.score [data-bar]');
+const paintSel=()=>document.querySelectorAll('.score [data-bar]').forEach(g=>g.classList.toggle('sel',+g.dataset.bar>=editing.i&&+g.dataset.bar<=editing.j));
+document.addEventListener('pointerdown',e=>{if(!editing||sheet.open)return;const g=e.target.closest?.('.score [data-bar]');if(!g)return;e.preventDefault();const k=+g.dataset.bar;
+ if(editing.range){editing.range=false;if(k<editing.i)editing.i=k;else editing.j=k;drag={start:editing.i};}else{editing.i=editing.j=k;drag={start:k};}paintSel();});
+document.addEventListener('pointermove',e=>{if(!drag)return;const g=barAt(e.clientX,e.clientY);if(!g)return;const k=+g.dataset.bar;editing.i=Math.min(drag.start,k);editing.j=Math.max(drag.start,k);paintSel();});
+document.addEventListener('pointerup',()=>{if(!drag)return;drag=null;moveSel(editing.i,editing.j);render();});
+document.addEventListener('focusin',e=>{if(e.target.id==='ed-text')caret=null;});
+document.addEventListener('selectionchange',()=>{const el=document.activeElement;if(el?.id==='ed-text')caret=el.selectionStart;});
+// Shared changes arrive on open, every 15 seconds, and as soon as the app comes back to the foreground.
+render();refresh();setInterval(()=>{if(!sheet.open&&!editing&&document.visibilityState==='visible')refresh()},15000);const resume=()=>{if(!sheet.open&&!editing)refresh();};window.addEventListener('online',resume);window.addEventListener('focus',resume);document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')resume();});
+if('serviceWorker'in navigator)navigator.serviceWorker.register('./sw.js').catch(()=>{});

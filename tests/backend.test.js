@@ -1,0 +1,5 @@
+import {test} from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';
+import {validData,validPassword} from '../supabase/functions/jazzbook-api/validation.js';
+test('backend accepts current charts and rejects corrupt shared data',()=>{const sets=JSON.parse(fs.readFileSync('web/sets.json'));for(const d of sets)assert(validData(d));const bad=structuredClone(sets[0]);bad.songs.push(bad.songs[0]);assert(!validData(bad));assert(!validData({...sets[0],title:''}));assert(!validData(null));});
+test('password validation accepts bootstrap and bounds bcrypt byte length',()=>{assert(validPassword('0000'));assert(validPassword('new-password'));assert(!validPassword('123'));assert(!validPassword('가'.repeat(25)));assert(!validPassword(null));});
+test('runtime has no legacy Sites calls or stored passwords',()=>{const app=fs.readFileSync('web/app.js','utf8'),api=fs.readFileSync('web/api.js','utf8');assert(!app.includes('chatgpt.site'));assert(!api.includes('chatgpt.site'));assert(!app.includes('X-Setnote-Editor'));assert(app.includes("data-act=\"admin\""));assert(fs.existsSync('web/admin.html'));});

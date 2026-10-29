@@ -54,11 +54,11 @@ function heading(song,bpm){const t=song.title||'',tw=textW(t,34,400)*.78,ts=Math
 
 // Renders the chart as SVG. With `aspect` (height/width of the screen area) rows are spaced, and if needed shrunk,
 // so the whole song fits without scrolling, like iReal Pro.
-export function renderChart(song,target=song.key,{aspect=0,head=true,minor='m'}={}){
+export function renderChart(song,target=song.key,{aspect=0,head=true,minor='m',edit=false,sel=[-1,-1]}={}){
  const rows=rowsFor(song.bars),delta=(keyPC(target)??0)-(keyPC(song.key)??0),top0=head?HEAD:4;
  let pitch=PITCH;if(aspect>0)pitch=Math.min(PITCH*1.25,Math.max(PITCH*.5,(WIDTH*aspect-top0-6)/rows.length));
  const s=Math.min(1,pitch/PITCH),bar=BAR*s,label=LABEL*s;
- const body=rows.map((row,ri)=>{const y=top0+ri*pitch,top=y+label,bottom=top+bar,base=top+bar*.826;return row.map((b,ci)=>{const x=LEFT+(ci+(row.length<4&&row[0].ending?4-row.length:0))*CELL;let out='',from=x+5,to=x+CELL-4;
+ const body=rows.map((row,ri)=>{const y=top0+ri*pitch,top=y+label,bottom=top+bar,base=top+bar*.826;return row.map((b,ci)=>{const x=LEFT+(ci+(row.length<4&&row[0].ending?4-row.length:0))*CELL;let out=edit?`<rect class="selbg" x="${x+1}" y="${f(top-2)}" width="${CELL-2}" height="${f(bar+4)}"/>`:'',from=x+5,to=x+CELL-4;
  if(b.start==='{'){out+=vline(x+1,top,bottom,5)+vline(x+7,top,bottom)+dots(x+12.5,top,bar);from=x+18;}
  else if(b.start==='['){out+=vline(x,top,bottom)+vline(x+4.6,top,bottom);from=x+10;}
  else out+=vline(x,top,bottom);
@@ -72,7 +72,8 @@ export function renderChart(song,target=song.key,{aspect=0,head=true,minor='m'}=
  if(b.text)out+=`<text transform="translate(${f(x+(b.section?10:b.ending?28:6))},${f(top-label*.22)}) scale(.85 1)" font-size="${f(label*.78)}" font-weight="400" class="annotation">${esc(b.text)}</text>`;
  const cs=b.chords,slot=(to-from)/Math.max(cs.length,1);
  out+=cs.map((c,k)=>chord(transpose(c,delta,target),from+k*slot,base,slot-(k<cs.length-1?5:0),s,minor)).join('');
- return `<g role="img" aria-label="${b.index+1}마디 ${esc(cs.map(c=>pretty(transpose(c,delta,target))).join(' '))}">${out}</g>`;}).join('');}).join('');
+ if(edit)out+=`<rect class="hit" x="${x}" y="${f(y)}" width="${CELL}" height="${f(pitch)}" fill="transparent"/>`;
+ return `<g role="img" data-bar="${b.index}"${b.index>=sel[0]&&b.index<=sel[1]?' class="sel"':''} aria-label="${b.index+1}마디 ${esc(cs.map(c=>pretty(transpose(c,delta,target))).join(' ')||'빈 마디')}">${out}</g>`;}).join('');}).join('');
  const h=f(top0+(rows.length-1)*pitch+label+bar+8);
  return `<svg xmlns="http://www.w3.org/2000/svg" class="chart" viewBox="0 0 ${WIDTH} ${h}" preserveAspectRatio="xMidYMin meet" role="img" aria-label="${esc(song.title)} 코드 차트" fill="currentColor" font-weight="600">${head?heading(song,song.bpm):''}${body}</svg>`;
 }

@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.openai/
+prepare.cjs
+seed.mjs
+model-temp.mjs

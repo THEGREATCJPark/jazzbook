@@ -26,9 +26,11 @@ No dependencies. Node 22+: `npm test`, `npm run build`. Serve `dist` with a stat
 
 ## Shared data
 
-`web/sets.json` is the bundled offline seed. The app refreshes public sets from `https://setnote-cj.cjpark.chatgpt.site/api/sets` on open, every 30 seconds and when back online; that existing backend is required for live common notes and shared editing.
+`web/sets.json` is the bundled offline seed. The app refreshes public sets from `https://setnote-cj.cjpark.chatgpt.site/api/sets` on open, every 15 seconds, when the app returns to the foreground and when back online; that existing backend is required for live common notes and shared editing.
 
-The shared-edit password is checked by that server, never in this public code: the app sends it as `X-Setnote-Editor`, and the server accepts it when it equals the Worker's `EDITOR_KEY` secret. To use `0000`, set `EDITOR_KEY` to `0000` on the Setnote deployment. A `#edit=KEY` leader link still unlocks shared editing too. It is not hosted by GitHub Pages. `backend/sets-route.ts` documents the corresponding deployed endpoint. The API allows this Pages origin, requires a server-held editor key for writes, and rejects conflicting versions. Client-side personal notes do not reach the API.
+The shared-edit password is checked by that server, never in this public code: the app sends it as `X-Setnote-Editor`, and the server accepts it when it equals the Worker's `EDITOR_KEY` secret. To use `0000`, set `EDITOR_KEY` to `0000` on the Setnote deployment. A `#edit=KEY` leader link still unlocks shared editing too. Menu → 공통 서버 shows the connection, last sync and last shared change, and can sync now or lock/unlock shared editing.
+
+The Setnote API is not hosted by GitHub Pages. `backend/sets-route.ts` documents the corresponding deployed endpoint. The API allows this Pages origin, requires a server-held editor key for writes, and rejects conflicting versions. Client-side personal notes do not reach the API.
 
 Uploaded iReal Pro files supplied the charts. Gravity was not present and is intentionally left empty; it can be imported using the leader link. Unrecognized imported symbols are retained as import warnings; review charts before performing. iReal Pro is a reference, not an affiliation.
 

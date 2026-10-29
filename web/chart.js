@@ -11,7 +11,7 @@ function chord(c,x,y,width){
 }
 export function renderChart(song,target=song.key){
  const rows=rowsFor(song.bars),width=600,h=116,delta=(keyPC(target)??0)-(keyPC(song.key)??0);
- const body=rows.map((row,ri)=>{const y=ri*h+8;return row.map((b,ci)=>{const x=ci*145+12,top=y+32,bottom=y+102;let out='';
+ const body=rows.map((row,ri)=>{const y=ri*h+8;return row.map((b,ci)=>{const x=(ci+(row.length<4&&row[0].ending?4-row.length:0))*145+12,top=y+32,bottom=y+102;let out='';
  if(b.section)out+=`<rect x="${x}" y="${y}" width="23" height="24" fill="currentColor"/><text x="${x+11.5}" y="${y+19}" text-anchor="middle" class="section" font-size="21" font-weight="600">${esc(b.section)}</text>`;
  if(b.ending){let n=1;while(ci+n<row.length&&!row[ci+n].ending&&!row[ci+n-1].end)n++;out+=line(x+4,y+31,x+145*n-4,y+26)+`<text x="${x+10}" y="${y+25}" font-size="17">${esc(b.ending)}</text>`;}
  out+=line(x,top,x,bottom);

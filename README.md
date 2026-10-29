@@ -4,8 +4,9 @@ A minimal, chart-first jazz setlist PWA. Inspired by mytempo's monochrome UI.
 
 Live: https://thegreatcjpark.github.io/jazzbook/
 
-- Phone-first SVG chord charts in an iReal Pro–like style: condensed chord font, large roots, superscript ♭/♯, subscript quality, section boxes, repeats, endings and slash bass.
-- Transpose, stage view, width/fit/large modes, dark/light themes.
+- Phone-first SVG chord charts modelled on iReal Pro: a squeezed humanist chord font, superscript ♭/♯, subscript quality, boxed sections, repeats, endings and slash bass.
+- "한 화면에 맞춤" (default) lays the whole song out for the screen so it never scrolls; "화면 너비" keeps full size and scrolls. Minor can show as Cm7 or C−7.
+- Transpose, stage view, dark/light themes.
 - Performance setlists follow the supplied running order; uploaded iReal HTML is chart source only.
 - Shared leader notes use the existing Setnote API; private notes remain in this browser's localStorage.
 - No login. The leader capability URL is supplied separately and never committed.
@@ -26,4 +27,4 @@ No dependencies. Node 22+: `npm test`, `npm run build`. Serve `dist` with a stat
 
 Uploaded iReal Pro files supplied the charts. Gravity was not present and is intentionally left empty; it can be imported using the leader link. Unrecognized imported symbols are retained as import warnings; review charts before performing. iReal Pro is a reference, not an affiliation.
 
-Chord font: Pathway Gothic One (SIL Open Font License, `web/fonts/OFL.txt`), bundled so charts render identically offline.
+Chord font: Source Sans 3 (SIL Open Font License, `web/fonts/OFL.txt`), squeezed horizontally like iReal Pro and bundled so charts render identically offline.

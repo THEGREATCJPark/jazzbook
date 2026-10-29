@@ -11,3 +11,6 @@ header .ver{font-size:12px;color:var(--muted);border:1px solid var(--line);borde
 .struct{display:flex;flex-direction:column;gap:5px}.struct div{display:flex;gap:4px;align-items:center;overflow-x:auto}.struct span{width:46px;flex-shrink:0;font-size:12px;color:var(--muted)}.struct button{flex-shrink:0;border:1px solid var(--line);border-radius:6px;min-height:34px;padding:2px 10px;font-size:13px}
 .empty .key{margin-top:4px}
 body.ed #toast{bottom:auto;top:calc(60px + env(safe-area-inset-top))}
+.key.bpm{padding:4px 11px;white-space:nowrap}.key.bpm small{font-size:10px;color:var(--muted);margin-left:2px}.key.bpm.own{border-color:var(--fg)}
+.bpm-row{display:flex;gap:6px;align-items:center}.bpm-row button{border:1px solid var(--line);border-radius:99px;min-width:48px;font-size:15px}.bpm-row input{flex:1;min-width:0;text-align:center;font-size:30px;font-family:var(--chord);font-weight:600;padding:6px}.tap{width:100%;margin:10px 0 2px;border:1px solid var(--line);border-radius:10px;min-height:52px;font-size:14px;color:var(--muted)}
+@media(max-width:380px){header .ver{display:none}}

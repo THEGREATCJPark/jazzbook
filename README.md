@@ -11,6 +11,7 @@ Live: https://thegreatcjpark.github.io/jazzbook/
 - No login. On first visit each person picks their name from the band list ("당신은 누구인가요?"); the choice is remembered on that device and can be changed from the menu.
 - Personal notes and personal chart versions are kept per member in this browser's localStorage.
 - Chord editor (✎): tap or drag across bars, type a whole run at once (`Am7 D7 | Gm7 C7`), use the chord keypad, or tap a reharmonisation idea (tritone sub, ii–V, I–VI–ii–V, iii–VI–ii–V, Tadd Dameron). Extra bars fill following empty bars; 마디 구조 edits sections, barlines, endings, time and text. Undo is kept for the session. Typing works in the key on screen.
+- The BPM pill next to the key opens the tempo: ±1/±5, tap tempo, and save as the member's own tempo or the shared one (password).
 - Saving offers "내 버전" (only this member, this device) or "공통 차트" (everyone). Shared notes, chart, key and event info are editable by every member after entering the shared password.
 - Install from Safari → Share → Add to Home Screen, or the Android browser's install option.
 - Cached charts work offline after the first successful visit. Shared edits need a network connection. Clearing browser data removes private notes.

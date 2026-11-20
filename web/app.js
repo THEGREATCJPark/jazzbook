@@ -2,6 +2,8 @@ import {KEYS,pretty,keyPC,transpose,importIreal} from './music.js';
 import {barsToText,textToBars,replaceRange,setMark,insertBar,deleteBars,blankChart,suggest} from './edit.js';
 import {esc,renderChart} from './chart.js';
 import {request,login,logout,session,remember} from './api.js';
+import {cueTopic} from './cue-channel.js';
+import {createLiveCues,readCueLines} from './cues.js';
 const $=s=>document.querySelector(s),safeGet=k=>{try{return localStorage.getItem(k)}catch{return null}},safeSet=(k,v)=>{try{localStorage.setItem(k,v);return true}catch{return false}};
 const defaults=await fetch('./sets.json').then(r=>r.json());
 let sets=defaults.map((data,i)=>({id:'public-event-'+i,data,version:0,editable:false}));
@@ -29,9 +31,29 @@ let pendingBpm='',taps=[];
 // The chart on screen: the edit draft, else this member's own version (unless they chose the common one), else common.
 const shown=()=>{const s=song();if(!s)return s;if(editing)return {...s,key:editing.key,bars:editing.bars};const p=!viewCommon&&mine();return p?{...s,key:p.key,bars:p.bars}:s;};
 const sheet=$('#sheet');
+let serverOffset=0;
+function songCues() {
+ const s=song();
+ if (!s) return [];
+ if (Array.isArray(s.cues)) return s.cues;
+ // Supply the bundled example for existing concerts created before the cues field.
+ const original=defaults.find((_,i)=>current().id==='public-event-'+i);
+ return original?.songs.find(item=>item.id===s.id)?.cues || [];
+}
+const liveCues=createLiveCues({
+ getTopic:()=>member && !editing && song() ? cueTopic(current().id,song().id) : '',
+ getPresets:songCues, refreshPresets:()=>refresh(), now:()=>Date.now()+serverOffset, modal
+});
+let cueDraft;
+function editCues() {
+ const s=song();
+ if(!s)return;
+ cueDraft={set:current().id,song:s.id,original:JSON.stringify(songCues())};
+ modal('큐 문구 편집',`<label for="cue-lines">${esc(s.title)}</label><textarea id="cue-lines" rows="6" placeholder="태그 1회 · 리타르 엔딩">${esc(songCues().join('\n'))}</textarea><p class="hint">한 줄에 한 문구씩 입력하세요. 위에서부터 버튼으로 표시됩니다. 곡당 12개, 문구당 30자까지.</p><p id="cue-edit-error" role="alert"></p><button class="primary" data-act="save-cues">공통 큐 저장</button>`);
+}
 function toast(t){$('#toast').textContent=t;$('#toast').style.display='block';clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('#toast').style.display='none',3500)}
 function modal(title,body){sheet.innerHTML=`<div class="head"><h2>${esc(title)}</h2><button data-act="close" aria-label="닫기">×</button></div>${body}`;if(!sheet.open)sheet.showModal();}
-function render(){document.body.classList.toggle('ed',!!editing);if(!member){picker();return;}const r=current(),s=song(),idx=r.data.songs.indexOf(s),own=s&&!editing&&mine(),me=MEMBERS.find(m=>m[0]===member);document.title=(s?s.title+' · ':'')+'jazzbook';$('#app').innerHTML=`<div class="frame ${stage?'stage':''} ${editing?'editing':''}">${editing?`<header><button data-act="ed-cancel">취소</button><h1 class="title">코드 편집</h1><button class="key" data-act="key" aria-label="전조 키 선택">${esc(pretty(target())||'—')}</button><button class="save" data-act="ed-save">저장</button></header>`:`<header><button data-act="drawer" aria-label="공연 셋리스트 열기">☰</button><h1 class="title">${esc(r.data.title)}</h1>${own?`<button class="ver" data-act="toggle-ver" aria-label="공통 차트와 내 버전 전환">${viewCommon?'공통 차트':'내 버전'}</button>`:''}<button class="key" data-act="key" ${!target()?'disabled':''} aria-label="전조 키 선택">${esc(pretty(target())||'—')}</button>${s?`<button class="key bpm ${safeGet(bpmKey())?'own':''}" data-act="bpm" aria-label="템포 ${esc(bpmOf(s)||'없음')}">${esc(bpmOf(s)||'—')}<small>bpm</small></button>`:''}${s?'<button data-act="edit" aria-label="코드 편집">✎</button>':''}<button data-act="menu" aria-label="보기 설정">···</button></header>`}<div class="workspace">${drawer?`<div class="backdrop" data-act="drawer"></div><aside class="sidebar"><div class="brand">jazzbook <button data-act="drawer" style="float:right;margin-top:-14px" aria-label="셋리스트 닫기">×</button></div><select class="set-select" id="set-select" aria-label="공연 선택">${sets.map(x=>`<option value="${esc(x.id)}" ${x.id===r.id?'selected':''}>${esc(x.data.title)}</option>`).join('')}</select><div>${r.data.songs.map((s,i)=>`<button class="song-row" data-song="${esc(s.id)}" aria-current="${i===idx}"><span class="n">${String(i+1).padStart(2,'0')}</span><span class="name">${esc(s.title)}<small>${esc([pretty(s.key),bpmOf(s)?bpmOf(s)+' bpm':'',s.style].filter(Boolean).join(' · '))}</small>${s.bars.length?'':'<span class="status">차트 대기</span>'}</button>`).join('')||'<p class="hint">아직 등록된 곡이 없습니다.</p>'}</div><div class="sidebar-foot"><button data-act="event">공연 정보 ↗</button><button data-act="share">공연 링크 복사 ↗</button><button data-act="new-song">곡 추가 ＋</button><button data-act="new-event">공연 추가 ＋</button><button data-act="who">${esc(member)} · ${esc(me?.[1]||'')} — 바꾸기</button><p class="status">${connected?'공통 메모 연결됨':'저장된 차트 · 오프라인 사용 가능'}</p></div></aside>`:''}<main class="music"><div class="score ${view==='fit'||editing?'fit':''}">${editing||s?.bars.length?'':`<div class="empty"><strong>${esc(s?.title||'새 공연')}</strong><span>${s?'아직 코드 차트가 없습니다.':'셋리스트에 곡을 추가해주세요.'}</span>${s?'<button data-act="edit" class="key">코드 직접 입력</button><button data-act="import" class="key">iReal Pro 차트 가져오기</button>':''}</div>`}</div></main></div>${editing?panel():`<footer><button data-act="prev" ${idx<=0?'disabled':''} aria-label="이전 곡">←</button><span class="position">${idx+1} / ${r.data.songs.length}</span><button data-act="notes">합주 메모${s?.memo?' ·':''}</button><button data-act="stage">차트만 ⛶</button><button data-act="next" ${idx>=r.data.songs.length-1?'disabled':''} aria-label="다음 곡">→</button></footer>`}${stage?'<button class="stage-exit" data-act="stage">닫기 ⛶</button>':''}</div>`;drawChart();}
+function render(){document.body.classList.toggle('ed',!!editing);if(!member){picker();liveCues.sync();return;}const r=current(),s=song(),idx=r.data.songs.indexOf(s),own=s&&!editing&&mine(),me=MEMBERS.find(m=>m[0]===member);document.title=(s?s.title+' · ':'')+'jazzbook';$('#app').innerHTML=`<div class="frame ${stage?'stage':''} ${editing?'editing':''}">${editing?`<header><button data-act="ed-cancel">취소</button><h1 class="title">코드 편집</h1><button class="key" data-act="key" aria-label="전조 키 선택">${esc(pretty(target())||'—')}</button><button class="save" data-act="ed-save">저장</button></header>`:`<header><button data-act="drawer" aria-label="공연 셋리스트 열기">☰</button><h1 class="title">${esc(r.data.title)}</h1>${own?`<button class="ver" data-act="toggle-ver" aria-label="공통 차트와 내 버전 전환">${viewCommon?'공통 차트':'내 버전'}</button>`:''}<button class="key" data-act="key" ${!target()?'disabled':''} aria-label="전조 키 선택">${esc(pretty(target())||'—')}</button>${s?`<button class="key bpm ${safeGet(bpmKey())?'own':''}" data-act="bpm" aria-label="템포 ${esc(bpmOf(s)||'없음')}">${esc(bpmOf(s)||'—')}<small>bpm</small></button>`:''}${s?'<button data-act="edit" aria-label="코드 편집">✎</button>':''}<button data-act="menu" aria-label="보기 설정">···</button></header>`}<div class="workspace">${drawer?`<div class="backdrop" data-act="drawer"></div><aside class="sidebar"><div class="brand">jazzbook <button data-act="drawer" style="float:right;margin-top:-14px" aria-label="셋리스트 닫기">×</button></div><select class="set-select" id="set-select" aria-label="공연 선택">${sets.map(x=>`<option value="${esc(x.id)}" ${x.id===r.id?'selected':''}>${esc(x.data.title)}</option>`).join('')}</select><div>${r.data.songs.map((s,i)=>`<button class="song-row" data-song="${esc(s.id)}" aria-current="${i===idx}"><span class="n">${String(i+1).padStart(2,'0')}</span><span class="name">${esc(s.title)}<small>${esc([pretty(s.key),bpmOf(s)?bpmOf(s)+' bpm':'',s.style].filter(Boolean).join(' · '))}</small>${s.bars.length?'':'<span class="status">차트 대기</span>'}</button>`).join('')||'<p class="hint">아직 등록된 곡이 없습니다.</p>'}</div><div class="sidebar-foot"><button data-act="event">공연 정보 ↗</button><button data-act="share">공연 링크 복사 ↗</button><button data-act="new-song">곡 추가 ＋</button><button data-act="new-event">공연 추가 ＋</button><button data-act="who">${esc(member)} · ${esc(me?.[1]||'')} — 바꾸기</button><p class="status">${connected?'공통 메모 연결됨':'저장된 차트 · 오프라인 사용 가능'}</p></div></aside>`:''}<main class="music"><div id="live-cue" role="status" aria-live="polite" aria-atomic="true" hidden></div><div class="score ${view==='fit'||editing?'fit':''}">${editing||s?.bars.length?'':`<div class="empty"><strong>${esc(s?.title||'새 공연')}</strong><span>${s?'아직 코드 차트가 없습니다.':'셋리스트에 곡을 추가해주세요.'}</span>${s?'<button data-act="edit" class="key">코드 직접 입력</button><button data-act="import" class="key">iReal Pro 차트 가져오기</button>':''}</div>`}</div></main></div>${editing?panel():`<footer><button data-act="prev" ${idx<=0?'disabled':''} aria-label="이전 곡">←</button><span class="position">${idx+1} / ${r.data.songs.length}</span><button data-act="notes">합주 메모${s?.memo?' ·':''}</button>${s?'<button data-act="cues">합주 큐</button>':''}<button data-act="stage">차트만 ⛶</button><button data-act="next" ${idx>=r.data.songs.length-1?'disabled':''} aria-label="다음 곡">→</button></footer>`}${stage?'<button class="stage-exit" data-act="stage">닫기 ⛶</button>':''}</div>`;drawChart();liveCues.sync();}
 // In fit mode the chart is laid out for the space it has, so a whole song shows without scrolling.
 function drawChart(){const el=$('.score'),s=shown()&&{...shown(),bpm:bpmOf(song())};if(!el||!s?.bars.length)return;const aspect=view==='fit'||editing?Math.max(.2,(el.clientHeight-10)/Math.max(el.clientWidth-4,1)):0;el.innerHTML=renderChart(s,target(),{aspect,minor,head:!editing,edit:!!editing,sel:editing?[editing.i,editing.j]:undefined});}
 let resizeTimer;window.addEventListener('resize',()=>{clearTimeout(resizeTimer);resizeTimer=setTimeout(drawChart,120);});
@@ -60,11 +82,11 @@ function moveSel(i,j=i){editing.i=Math.max(0,Math.min(i,editing.bars.length-1));
 function change(bars){editing.hist.push(editing.bars);if(editing.hist.length>100)editing.hist.shift();editing.bars=bars;editing.dirty=true;}
 function askPassword(next){afterUnlock=next;modal('공통 편집',`<p>공통 메모와 코드는 모든 멤버에게 바로 반영됩니다.</p><label for="pw">비밀번호</label><input id="pw" type="password" autocomplete="current-password" enterkeyhint="done"><button class="primary" data-act="pw-ok">확인</button>`);setTimeout(()=>$('#pw')?.focus(),50);}
 // Shared writes require a revocable server session.
-const SHARED=new Set(['save-bpm','edit-song','save-song','save-key','new-song','add-song','new-event','add-event','edit-event','save-event','move-up','move-down','save-common']);
+const SHARED=new Set(['edit-cues','save-bpm','edit-song','save-song','save-key','new-song','add-song','new-event','add-event','edit-event','save-event','move-up','move-down','save-common']);
 let lastSync=0;
-async function refresh(){try{const data=await request();if(!data.sets?.length)throw Error();if(session()&&!data.sets.some(s=>s.editable))remember('');
+async function refresh(){try{const start=Date.now(),data=await request(),end=Date.now(),server=Date.parse(data.serverTime);if(Number.isFinite(server)&&end-start<2000)serverOffset=Math.round(server-(start+end)/2);if(!data.sets?.length)throw Error();if(session()&&!data.sets.some(s=>s.editable))remember('');
  const before=new Map(sets.map(x=>[x.id,x.version])),newer=loadedRemote&&data.sets.some(x=>before.has(x.id)&&x.version>before.get(x.id));
- sets=data.sets;connected=true;lastSync=Date.now();if(newer)toast('다른 멤버의 공통 변경을 반영했습니다.');if(!loadedRemote){const requested=new URLSearchParams(location.search).get('set');if(requested&&sets.some(s=>s.id===requested)){setId=requested;songId=current().data.songs[0]?.id;}loadedRemote=true;}safeSet('jazzbook.sets',JSON.stringify(sets.map(s=>({...s,editable:false}))));if(!sets.some(s=>s.id===setId))setId=sets[0].id;if(!sheet.open&&!editing)render();}catch{connected=false;}}
+ sets=data.sets;connected=true;lastSync=Date.now();if(newer)toast('다른 멤버의 공통 변경을 반영했습니다.');if(!loadedRemote){const requested=new URLSearchParams(location.search).get('set');if(requested&&sets.some(s=>s.id===requested)){setId=requested;songId=current().data.songs[0]?.id;}loadedRemote=true;}safeSet('jazzbook.sets',JSON.stringify(sets.map(s=>({...s,editable:false}))));if(!sets.some(s=>s.id===setId))setId=sets[0].id;if(!sheet.open&&!editing)render();else liveCues.sync();}catch{connected=false;}}
 async function save(data){const r=current();const result=await request({id:r.id,version:r.version,data});r.data=data;r.version=result.version;r.updated=result.updated;lastSync=Date.now();safeSet('jazzbook.sets',JSON.stringify(sets.map(s=>({...s,editable:false}))));render();}
 
 function notes(){const s=song();if(!s)return;modal('합주 메모',`<div class="tabs"><button data-act="common" class="${noteTab==='common'?'active':''}">공통</button><button data-act="private" class="${noteTab==='private'?'active':''}">${esc(member)} 메모</button></div>${noteTab==='private'?`<textarea id="private-note" aria-label="${esc(member)} 메모" placeholder="예: A파트 4마디 the lick">${esc(safeGet(noteKey())||'')}</textarea><p class="hint">${esc(member)}님만 봅니다. 이 기기에 자동 저장됩니다.</p>`:`<p>${esc(s.memo||'아직 합주 메모가 없습니다.')}</p>${s.warnings?.length?`<p class="hint">${esc(s.warnings.join(' '))}</p>`:''}<p class="hint">${esc([pretty(s.key),bpmOf(s)?bpmOf(s)+' bpm':'',s.style].filter(Boolean).join(' · '))}</p><button class="primary" data-act="edit-song">공통 메모 편집</button><p class="hint">모든 멤버가 같은 내용을 봅니다. 편집할 때 비밀번호를 묻습니다.</p>`}`);}
@@ -77,6 +99,24 @@ case 'drawer':drawer=!drawer;render();break;
 case 'prev':case 'next':{const i=r.data.songs.indexOf(s)+(a==='next'?1:-1);if(r.data.songs[i])selectSong(r.data.songs[i].id);break;}
 case 'key':modal('전조',`<div class="key-grid">${KEYS.map(k=>`<button data-key="${k}" class="${keyPC(target())===keyPC(k)?'chosen':''}">${pretty(k)}${s.key.endsWith('-')?'m':''}</button>`).join('')}</div><p class="hint">원키 ${esc(pretty(s.key))} · 지금 보는 차트에 적용됩니다.</p>${editing||!s.key?'':'<button class="primary" data-act="save-key">현재 키를 공통 키로 저장</button>'}`);break;
 case 'save-key':{const d=structuredClone(r.data),ss=d.songs.find(x=>x.id===s.id),delta=keyPC(target())-keyPC(s.key);ss.bars=ss.bars.map(b=>({...b,chords:b.chords.map(c=>transpose(c,delta,target()))}));ss.key=target();await save(d);sheet.close();toast('공통 키를 저장했습니다.');break;}
+case 'cues':if(s)liveCues.open(s.title);break;
+case 'edit-cues':editCues();break;
+case 'save-cues':{
+ const input=$('#cue-lines'),button=$('[data-act="save-cues"]'),error=$('#cue-edit-error');
+ if(!input||button.disabled)break;
+ button.disabled=true;
+ try {
+   if(cueDraft.set!==r.id||cueDraft.song!==s?.id||cueDraft.original!==JSON.stringify(songCues()))throw Error('공통 큐가 바뀌었습니다. 문구를 복사한 뒤 다시 열어주세요.');
+   const cues=readCueLines(input.value),d=structuredClone(r.data);
+   d.songs.find(item=>item.id===s.id).cues=cues;
+   await save(d);
+   liveCues.open(s.title);
+ } catch(err) {
+   if(err.status===409||err.status===401)await refresh();
+   error.textContent=err.status===401?'편집 시간이 만료되었습니다. 문구를 복사하고 공통 편집을 다시 열어주세요.':err.message;
+ } finally {button.disabled=false;}
+ break;
+}
 case 'notes':notes();break;
 case 'common':case 'private':noteTab=a;notes();break;
 case 'edit-song':editSong();break;

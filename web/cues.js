@@ -20,9 +20,15 @@ export function createLiveCues({getTopic, getPresets, refreshPresets, now, modal
   function paint() {
     const banner = document.querySelector('#live-cue');
     if (!banner) return;
-    const text = active && active.until > now() ? active.text : '';
+    const text = active && active.room === getTopic() && active.until > now() ? active.text : '';
     if (banner.textContent !== text) banner.textContent = text;
     banner.hidden = !text;
+  }
+  function display(text, room, until) {
+    clearTimeout(displayTimer);
+    active = {text, room, until};
+    displayTimer = setTimeout(() => { active = null; paint(); }, Math.max(0, until - now()));
+    paint();
   }
   function updatePanel() {
     const el = panel();
@@ -47,10 +53,7 @@ export function createLiveCues({getTopic, getPresets, refreshPresets, now, modal
     seen.add(event.id);
     if (seen.size > 64) seen.delete(seen.values().next().value);
     lastTime = event.at;
-    active = {text:event.text, until:Math.min(now(), event.at) + CUE_DURATION};
-    clearTimeout(displayTimer);
-    displayTimer = setTimeout(() => { active = null; paint(); }, Math.max(0, active.until - now()));
-    paint();
+    display(event.text, room, Math.min(now(), event.at) + CUE_DURATION);
   }
   function sync() {
     const next = document.hidden || navigator.onLine === false ? '' : getTopic();
@@ -75,11 +78,18 @@ export function createLiveCues({getTopic, getPresets, refreshPresets, now, modal
   function open(title) {
     const presets = getPresets();
     modal('합주 큐', `<section class="cue-panel"><div class="cue-heading"><strong>${esc(title)}</strong><small class="cue-connection"></small></div>
-      ${presets.map(text => `<button class="cue-send" data-cue="${esc(text)}" disabled><span>${esc(text)}</span><small></small></button>`).join('') ||
-        '<p class="hint">이 곡에서 보낼 큐 문구를 먼저 추가하세요.</p>'}
-      <p class="cue-feedback" role="status"></p><button class="menu-item" data-act="edit-cues">큐 문구 편집</button></section>`);
+      <p class="hint">${presets.length ? '보낼 문구를 누르면 같은 곡을 보고 있는 멤버의 악보에 표시됩니다.' : '저장된 큐가 없습니다. 큐 문구 편집에서 추가하세요.'}</p>
+      ${presets.map(text => `<button class="cue-send" data-cue="${esc(text)}" disabled><span>${esc(text)}</span><small></small></button>`).join('')}
+      <p class="cue-feedback" role="status"></p>
+      <button class="menu-item" data-cue-preview>내 화면에서 미리보기</button>
+      <button class="menu-item" data-act="edit-cues">큐 문구 편집</button></section>`);
     updatePanel();
     const el = panel(), room = getTopic();
+    el.querySelector('[data-cue-preview]').onclick = () => {
+      if (getTopic() !== room) return;
+      el.closest('dialog').close();
+      display(getPresets()[0] || '여기에 합주 큐가 표시됩니다', room, now() + CUE_DURATION);
+    };
     for (const button of el.querySelectorAll('[data-cue]')) button.onclick = async () => {
       const text = button.dataset.cue;
       if (getTopic() !== room || !channel || status !== 'ready' || !getPresets().includes(text)) return;
@@ -89,6 +99,7 @@ export function createLiveCues({getTopic, getPresets, refreshPresets, now, modal
       for (const info of el.querySelectorAll('.cue-send small')) info.textContent = '';
       button.querySelector('small').textContent = '보내는 중';
       const ok = await channel.send(cue);
+      if (ok && topic === room && el.dataset.latest === cue.id) await receive(cue);
       if (!el.isConnected || el.dataset.latest !== cue.id) return;
       button.querySelector('small').textContent = ok ? '방금 보냄' : '';
       el.querySelector('.cue-feedback').textContent = ok ? '' : '전송을 확인하지 못했습니다. 연결을 확인해주세요.';

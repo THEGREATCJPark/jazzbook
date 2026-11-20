@@ -72,8 +72,26 @@ async def test():
                 raise
             await page.locator('#sheet [data-act="close"]').click()
         await asyncio.gather(wait_connected(a), wait_connected(b), wait_connected(c))
+        await c.context.set_offline(True)
+        await c.locator('footer [data-act="cues"]').click()
+        await c.get_by_role('button', name='내 화면에서 미리보기').click()
+        await expect(c.locator('#live-cue')).to_have_text('여기에 합주 큐가 표시됩니다')
+        await expect(c.locator('#live-cue')).to_be_visible()
+        await c.context.set_offline(False)
+        await wait_connected(c)
         await b.locator('footer [data-act="stage"]').click()
         box = await b.locator('[data-bar="0"]').bounding_box()
+        await a.locator('footer [data-act="cues"]').click()
+        await a.get_by_role('button', name='내 화면에서 미리보기').click()
+        await expect(a.locator('#live-cue')).to_have_text('태그 1회 · 리타르 엔딩')
+        await expect(a.locator('#live-cue')).to_be_visible()
+        await expect(b.locator('#live-cue')).to_be_hidden()
+        assert not await b.locator('#live-cue').evaluate("""banner => new Promise(resolve => {
+            const watch = new MutationObserver(() => { if (!banner.hidden) { watch.disconnect(); resolve(true); } });
+            watch.observe(banner, {attributes:true, childList:true});
+            setTimeout(() => { watch.disconnect(); resolve(!banner.hidden); }, 800);
+        })""")
+        await expect(a.locator('#live-cue')).to_be_hidden(timeout=8000)
         await a.locator('footer [data-act="cues"]').click()
         send = a.get_by_role('button', name='태그 1회 · 리타르 엔딩')
         await expect(send).to_be_enabled()
@@ -82,6 +100,14 @@ async def test():
         assert box == await b.locator('[data-bar="0"]').bounding_box()
         await expect(c.locator('#live-cue')).to_be_hidden()
         await expect(send).to_contain_text('방금 보냄')
+        sender_banner = a.locator('#live-cue')
+        await expect(sender_banner).to_have_text('태그 1회 · 리타르 엔딩')
+        await expect(sender_banner).to_be_visible()
+        bounds = await sender_banner.bounding_box()
+        sheet = a.locator('#sheet[open]')
+        assert bounds['y'] + bounds['height'] <= (await sheet.bounding_box())['y']
+        assert await sheet.evaluate("d => getComputedStyle(d, '::backdrop').backgroundColor") == 'rgba(0, 0, 0, 0)'
+        await expect(sender_banner).to_be_hidden(timeout=8000)
         await expect(b.locator('#live-cue')).to_be_hidden(timeout=8000)
         print('PASS same-song delivery, stage geometry, 6s expiry, sender acknowledgement, other-song isolation', flush=True)
         await a.get_by_role('button', name='큐 문구 편집').click()

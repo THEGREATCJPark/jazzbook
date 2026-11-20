@@ -22,5 +22,8 @@ body.ed #toast{bottom:auto;top:calc(60px + env(safe-area-inset-top))}
 .cue-heading{padding:2px 0 14px}.cue-heading strong{font-size:14px}.cue-heading small,.cue-send small{color:var(--muted);font-size:12px;white-space:nowrap}
 .cue-send{width:100%;text-align:left;min-height:54px;border-top:1px solid var(--line);padding:10px 2px;font-size:17px}.cue-send span{overflow-wrap:anywhere}.cue-panel .menu-item{margin-top:12px}
 .cue-feedback:empty,#cue-edit-error:empty{display:none}
+/* Keep the chart heading visible above the open sender controls. */
+dialog:has(.cue-panel){max-height:min(88dvh,calc(100dvh - env(safe-area-inset-top) - 135px))}
+dialog:has(.cue-panel)::backdrop{background:transparent}
 @media(max-width:380px){footer{padding-inline:2px}footer button{padding-inline:7px}}
 @media print{#live-cue{display:none}}
